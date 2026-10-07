@@ -76,11 +76,11 @@ Depending on the architecture and training objective, the compact representation
 
 The architectural idea is to separate **expensive semantic understanding** from **cheap candidate scoring**. After the representation is produced, the scorer can use an MLP, a two-tower retrieval model, a ranking network, or candidate interaction features. The representation and downstream scoring objective must be aligned; extracting an arbitrary hidden state is not enough.
 
-Another branch is **context compression into soft tokens**: instead of summarizing a history as readable text, encode it into a small set of continuous vectors that a downstream language model can condition on. AutoCompressors use summary vectors as soft prompts, while ICAE produces compact memory slots. Gist tokens are related, but use special tokens and attention constraints to learn reusable compressed prompt states. These approaches differ in how they train and pass the compressed information to the model. [AutoCompressors](https://arxiv.org/abs/2305.14788), [ICAE](https://arxiv.org/abs/2307.06945), [Gist Tokens](https://arxiv.org/abs/2304.08467).
+Another branch worth exploring is **context compression into soft tokens**: instead of summarizing a history as readable text, encode it into a small set of continuous vectors that a downstream language model can condition on.
 
 This differs from producing one user embedding for a conventional ranker: the compressed representation remains part of the language model's conditioning context. Here, “soft” refers to continuous representations, rather than the discrete codewords used in semantic IDs. Not every learned soft prompt compresses an input history, and these representations generally need compatible model interfaces and training; they are not arbitrary vectors that can be inserted into any text-only API.
 
-**In the next note, I plan to take a closer look at soft-token context compression:** what methods are available, how their objectives and interfaces differ, and what information survives compression. Applications I want to explore include reusable user-history memory, query-conditioned interest compression, compressed item or retrieved-document context, and sharing compressed history across query generation and reranking. These are experiment ideas, not results established by the papers above. I would compare them with text summaries and ordinary embeddings on recommendation quality, latency, compression cost, and reuse across tasks.
+**In the next note, I plan to take a closer look at soft-token context compression:** what methods are available, how their objectives and interfaces differ, and what information survives compression. Applications I want to explore include reusable user-history memory, query-conditioned interest compression, compressed item or retrieved-document context, and sharing compressed history across query generation and reranking. These are experiment ideas, not established results. I would compare them with text summaries and ordinary embeddings on recommendation quality, latency, compression cost, and reuse across tasks.
 
 ### 2.5 Another option: generative scoring
 
@@ -294,9 +294,6 @@ The papers below support specific mechanisms discussed above. Cross-domain paper
 13. Shao et al. (2024). [DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models](https://arxiv.org/abs/2402.03300). Introduces GRPO.
 14. Joachims, Swaminathan, and Schnabel (2016 preprint; WSDM 2017). [Unbiased Learning-to-Rank with Biased Feedback](https://arxiv.org/abs/1608.04468).
 15. Swaminathan and Joachims (2015). [Counterfactual Risk Minimization: Learning from Logged Bandit Feedback](https://arxiv.org/abs/1502.02362).
-16. Chevalier et al. (2023). [Adapting Language Models to Compress Contexts](https://arxiv.org/abs/2305.14788). AutoCompressors.
-17. Ge et al. (2023). [In-context Autoencoder for Context Compression in a Large Language Model](https://arxiv.org/abs/2307.06945). ICAE.
-18. Mu, Li, and Goodman (2023). [Learning to Compress Prompts with Gist Tokens](https://arxiv.org/abs/2304.08467).
 
 ## Keywords
 
