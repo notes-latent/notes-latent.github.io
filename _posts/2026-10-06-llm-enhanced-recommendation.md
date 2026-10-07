@@ -1,19 +1,19 @@
 ---
 layout: post
 title: "LLM-enhanced Recommendation: From Sequence Encoding to Grounded Generation"
-description: "A working mental model for using LLMs as context encoders and grounded generators, with notes on retrieval, serving cost, and behavioral alignment."
+description: "A working mental model for LLM context modeling, grounded reasoning, and text recommendation generation, with notes on serving cost and behavioral alignment."
 ---
 
 ## 1. High-level observation
 
-Reading public work on sequential recommendation, generative recommendation, and language-model-based retrieval and ranking, I find two useful directions:
+Reading public work on sequential recommendation and LLM-enhanced recommendation, I find two useful directions:
 
 1. **Use an LLM as a rich context / sequence encoder**, while keeping expensive candidate-by-candidate scoring outside the LLM.
-2. **Use an LLM for grounded generation or target-conditioned understanding**, then connect its output back to retrieval, ranking, or direct recommendation.
+2. **Use an LLM for grounded reasoning and text recommendation generation**, such as interpreting intent or generating recommended queries, tags, and explanations.
 
-My working interpretation is that language models are useful where **semantic understanding and flexible context modeling matter**, while efficient recommendation components can handle **large-scale scoring and serving**. HLLM illustrates language-model-based item and user modeling; TIGER illustrates recommendation through generated item identifiers. These are different architectures, rather than implementations of one universal recipe. [HLLM](https://arxiv.org/abs/2409.12740), [TIGER](https://arxiv.org/abs/2305.05065).
+My working interpretation is that language models are useful where **semantic understanding and flexible context modeling matter**, while efficient recommendation components can handle **large-scale scoring and serving**.
 
-This article is a synthesis of public research and ideas I want to explore. The two directions are a mental model, not an exhaustive taxonomy or a claim that the entire industry is converging on one design. A generative recommender also need not be a pretrained natural-language LLM: TIGER, for example, trains a sequence-to-sequence model over semantic item IDs.
+This article focuses on context modeling and grounded reasoning / text generation. Predicting item identifiers at the retrieval stage is a separate generative-retrieval topic that I plan to cover in its own note. The two directions here are a working mental model based on public research, not an exhaustive taxonomy or a claim that the entire industry is converging on one design.
 
 ## 2. Direction I: LLM as a context and sequence encoder
 
@@ -99,11 +99,11 @@ The distinction is:
 
 The second approach is often easier to justify for reranking a small candidate set. Prefix caching and batching can help, but do not remove all candidate-specific cost. A useful score might normalize probabilities over the chosen relevance labels; a raw logit is not automatically a calibrated relevance probability.
 
-## 3. Direction II: LLM as grounded generation
+## 3. Direction II: LLM for grounded reasoning and text recommendation generation
 
 Generation is particularly natural when the output itself is semantic: a recommended query, autocomplete suggestion, rewrite, tag, category, or explanation. GQR directly frames query recommendation as generation; P5 covers multiple recommendation tasks through text-to-text learning. [Generating Query Recommendations via LLMs](https://arxiv.org/abs/2405.19749), [P5](https://arxiv.org/abs/2203.13366).
 
-Discrete item representations provide another action space. TIGER predicts semantic IDs, which resolve to catalog items rather than arbitrary text. [TIGER](https://arxiv.org/abs/2305.05065).
+Here, reasoning means interpreting the available evidence and the user's likely intent to guide generation. It may be implicit or expressed through an intermediate intent description; generating a reasoning trace is not itself evidence that recommendation quality improves.
 
 ### 3.1 General versus personalized understanding
 
@@ -129,9 +129,9 @@ Generation can play at least two roles.
 
 **Context → generated intent / concept / representation → retrieve candidates → rank candidates**
 
-The intermediate output might be keywords, categories, structured attributes, graph nodes, or semantic IDs. Those options require different mapping and validation mechanisms; invented categories or invalid identifiers do not become grounded simply because they are structured.
+The intermediate output might be textual intents, keywords, categories, or structured attributes. These require appropriate mapping and validation mechanisms; invented categories do not become grounded simply because they are structured. The focus here is on understanding and generating semantic content before retrieval, rather than predicting retrieval IDs.
 
-HyDE is a related example from information retrieval: it generates a hypothetical document, encodes it, and retrieves real documents from a corpus. TIGER takes a different route by generating catalog-linked semantic IDs. These illustrate two distinct ways generation can connect to retrieval. [HyDE](https://arxiv.org/abs/2212.10496), [TIGER](https://arxiv.org/abs/2305.05065).
+HyDE is a related example from information retrieval: it generates a hypothetical document, encodes it, and retrieves real documents from a corpus. The generated text supplies semantic context for a separate retrieval step. [HyDE](https://arxiv.org/abs/2212.10496).
 
 I think of this role as **semantic planning**: flexible generation proposes a direction, while retrieval and validation anchor the result to available content. This description does not imply that the model performs reliable multi-step reasoning.
 
@@ -209,7 +209,7 @@ The original GRPO formulation can update using samples from an older policy with
 
 ## 8. A unified view
 
-### Pattern A: Representation-first
+### Pattern A: Context modeling
 
 **Behavioral sequence → context engineering → LLM encoder → representation → retrieval / ranking**
 
@@ -219,9 +219,9 @@ The question is:
 
 The main bottlenecks include sequence construction, compression, representation learning, embedding quality, and serving cost.
 
-### Pattern B: Generation-first
+### Pattern B: Grounded reasoning and text generation
 
-**Behavioral / target context → grounding → model generation → intent / query / category / semantic ID → retrieval or direct recommendation**
+**Behavioral / target context → grounding → intent understanding / reasoning → generated query / tag / explanation → direct recommendation or downstream retrieval / ranking**
 
 The question is:
 
@@ -257,7 +257,7 @@ Could this preserve useful information better than one universal user embedding?
 
 ### 2. Generate-to-retrieve
 
-**Model → intents / concepts / semantic IDs → retrieval**
+**Model → textual intents / concepts / queries → retrieval**
 
 How can intermediate generation stay flexible while reliably resolving to valid catalog content?
 
@@ -285,16 +285,15 @@ The papers below support specific mechanisms discussed above. Cross-domain paper
 4. Chen et al. (2024). [HLLM: Enhancing Sequential Recommendations via Hierarchical Large Language Models for Item and User Modeling](https://arxiv.org/abs/2409.12740).
 5. Nogueira, Jiang, and Lin (2020 arXiv version). [Document Ranking with a Pretrained Sequence-to-Sequence Model](https://arxiv.org/abs/2003.06713). Relevance-label generation for document ranking.
 6. Geng et al. (2022). [Recommendation as Language Processing (RLP): A Unified Pretrain, Personalized Prompt & Predict Paradigm (P5)](https://arxiv.org/abs/2203.13366).
-7. Rajput et al. (2023). [Recommender Systems with Generative Retrieval](https://arxiv.org/abs/2305.05065). TIGER and semantic IDs.
-8. Gao et al. (2022 preprint; ACL 2023). [Precise Zero-Shot Dense Retrieval without Relevance Labels](https://arxiv.org/abs/2212.10496). HyDE.
-9. Bacciu et al. (2024). [Generating Query Recommendations via LLMs](https://arxiv.org/abs/2405.19749). GQR and retrieval-augmented GQR.
-10. Hsieh et al. (2023). [Distilling Step-by-Step! Outperforming Larger Language Models with Less Training Data and Smaller Model Sizes](https://arxiv.org/abs/2305.02301).
-11. Zhou et al. / OneRec Team (2025). [OneRec-V2 Technical Report](https://arxiv.org/abs/2508.20900).
-12. Rafailov et al. (2023). [Direct Preference Optimization: Your Language Model is Secretly a Reward Model](https://arxiv.org/abs/2305.18290).
-13. Shao et al. (2024). [DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models](https://arxiv.org/abs/2402.03300). Introduces GRPO.
-14. Joachims, Swaminathan, and Schnabel (2016 preprint; WSDM 2017). [Unbiased Learning-to-Rank with Biased Feedback](https://arxiv.org/abs/1608.04468).
-15. Swaminathan and Joachims (2015). [Counterfactual Risk Minimization: Learning from Logged Bandit Feedback](https://arxiv.org/abs/1502.02362).
+7. Gao et al. (2022 preprint; ACL 2023). [Precise Zero-Shot Dense Retrieval without Relevance Labels](https://arxiv.org/abs/2212.10496). HyDE.
+8. Bacciu et al. (2024). [Generating Query Recommendations via LLMs](https://arxiv.org/abs/2405.19749). GQR and retrieval-augmented GQR.
+9. Hsieh et al. (2023). [Distilling Step-by-Step! Outperforming Larger Language Models with Less Training Data and Smaller Model Sizes](https://arxiv.org/abs/2305.02301).
+10. Zhou et al. / OneRec Team (2025). [OneRec-V2 Technical Report](https://arxiv.org/abs/2508.20900).
+11. Rafailov et al. (2023). [Direct Preference Optimization: Your Language Model is Secretly a Reward Model](https://arxiv.org/abs/2305.18290).
+12. Shao et al. (2024). [DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models](https://arxiv.org/abs/2402.03300). Introduces GRPO.
+13. Joachims, Swaminathan, and Schnabel (2016 preprint; WSDM 2017). [Unbiased Learning-to-Rank with Biased Feedback](https://arxiv.org/abs/1608.04468).
+14. Swaminathan and Joachims (2015). [Counterfactual Risk Minimization: Learning from Logged Bandit Feedback](https://arxiv.org/abs/1502.02362).
 
 ## Keywords
 
-`Sequential Recommendation` · `Generative Recommendation` · `LLM Recommendation` · `Context Engineering` · `Sequence Engineering` · `User Representation Learning` · `Target-aware Representation` · `Grounded Generation` · `Generate-to-Retrieve` · `Semantic ID` · `Query Recommendation` · `Autocomplete` · `LLM Ranker` · `Teacher-Student Distillation` · `SFT` · `DPO` · `GRPO` · `Online Exploration` · `Preference Alignment` · `Engagement Modeling`
+`Sequential Recommendation` · `LLM Recommendation` · `Context Modeling` · `Context Engineering` · `Sequence Engineering` · `User Representation Learning` · `Target-aware Representation` · `Grounded Reasoning` · `Grounded Generation` · `Generate-to-Retrieve` · `Query Recommendation` · `Autocomplete` · `LLM Ranker` · `Teacher-Student Distillation` · `SFT` · `DPO` · `GRPO` · `Online Exploration` · `Preference Alignment` · `Engagement Modeling`
