@@ -19,10 +19,10 @@ defaults:
     values:
       layout: post
 exclude:
+  - AGENTS.md
   - README.md
   - Gemfile
   - Gemfile.lock
   - scripts
   - vendor
   - .bundle
-
