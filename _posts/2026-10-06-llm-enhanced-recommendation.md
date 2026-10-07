@@ -27,17 +27,17 @@ A practical decomposition is:
 
 The expensive computation happens mainly on the context side and is amortized across candidates. This is an architectural option, not a guarantee of cheap serving: context length, model size, update frequency, caching, and latency still matter.
 
-Netflix's **GenRec** is a concrete example: it verbalizes user interaction histories, item metadata, and request context as text, then uses an LLM to produce a pooled representation. A catalog-aware scoring head combines this representation with learned item embeddings to score items. Its prefill-only serving design consumes the context once and scores the candidate set in a single forward pass, avoiding step-by-step autoregressive recommendation generation. [GenRec: An LLM-Backed Recommendation Ranker at Netflix](https://arxiv.org/abs/2608.10257).
+Netflix's **[GenRec](https://arxiv.org/abs/2608.10257)** is a concrete example: it verbalizes user interaction histories, item metadata, and request context as text, then uses an LLM to produce a pooled representation. A catalog-aware scoring head combines this representation with learned item embeddings to score items. Its prefill-only serving design consumes the context once and scores the candidate set in a single forward pass, avoiding step-by-step autoregressive recommendation generation.
 
 ### 2.2 From feature engineering to context engineering
 
-Classic sequential recommenders such as GRU4Rec, SASRec, and BERT4Rec learn from interaction sequences, commonly represented as item IDs:
+Classic sequential recommenders such as [GRU4Rec](https://arxiv.org/abs/1511.06939), [SASRec](https://arxiv.org/abs/1808.09781), and [BERT4Rec](https://arxiv.org/abs/1904.06690) learn from interaction sequences, commonly represented as item IDs:
 
 **Item ID → item ID → item ID → …**
 
-They use different sequence-learning mechanisms: recurrent modeling, causal self-attention, and bidirectional masked-item prediction, respectively. [GRU4Rec](https://arxiv.org/abs/1511.06939), [SASRec](https://arxiv.org/abs/1808.09781), [BERT4Rec](https://arxiv.org/abs/1904.06690).
+They use different sequence-learning mechanisms: recurrent modeling, causal self-attention, and bidirectional masked-item prediction, respectively.
 
-In a broader recommendation system, additional features might include engagement type, dwell time, click / save / purchase, category, timestamp, and session information. Language models provide another way to combine heterogeneous information. P5, for example, expresses recommendation tasks and their inputs in a shared text-to-text format. [P5](https://arxiv.org/abs/2203.13366).
+In a broader recommendation system, additional features might include engagement type, dwell time, click / save / purchase, category, timestamp, and session information. Language models provide another way to combine heterogeneous information. [P5](https://arxiv.org/abs/2203.13366), for example, expresses recommendation tasks and their inputs in a shared text-to-text format.
 
 A hypothetical textual history could look like this:
 
@@ -50,7 +50,7 @@ The shift I find useful is:
 - **Traditional sequential recommendation:** substantial effort goes into sequence architecture and input features.
 - **LLM-based sequence modeling:** more of the iteration may move toward context construction, event selection, compression, and representation format.
 
-GenRec explicitly describes this shift from feature engineering to context engineering. Once a useful base encoder exists, some changes to the history representation may not require redesigning the architecture. This is my interpretation of a design opportunity; it does not mean feature schemas, recommendation-specific training, or model architecture cease to matter. [GenRec](https://arxiv.org/abs/2608.10257).
+GenRec explicitly describes this shift from feature engineering to context engineering. Once a useful base encoder exists, some changes to the history representation may not require redesigning the architecture. This is my interpretation of a design opportunity; it does not mean feature schemas, recommendation-specific training, or model architecture cease to matter.
 
 ### 2.3 Why this is useful
 
@@ -88,7 +88,7 @@ A different approach expresses relevance scoring as language modeling:
 
 **Query + context + candidate → language model → relevance-label token probabilities → score**
 
-For example, the output might be “Yes” / “No.” The monoT5 work demonstrates this idea for document ranking, using the probabilities of relevance-label tokens. Its evidence is from information retrieval, rather than personalized recommendation. [Document Ranking with a Pretrained Sequence-to-Sequence Model](https://arxiv.org/abs/2003.06713).
+For example, the output might be “Yes” / “No.” The [monoT5](https://arxiv.org/abs/2003.06713) work demonstrates this idea for document ranking, using the probabilities of relevance-label tokens. Its evidence is from information retrieval, rather than personalized recommendation.
 
 The distinction is:
 
@@ -101,7 +101,7 @@ The second approach is often easier to justify for reranking a small candidate s
 
 ## 3. Direction II: LLM for grounded reasoning and text recommendation generation
 
-Generation is particularly natural when the output itself is semantic: a recommended query, autocomplete suggestion, rewrite, tag, category, or explanation. GQR directly frames query recommendation as generation; P5 covers multiple recommendation tasks through text-to-text learning. [Generating Query Recommendations via LLMs](https://arxiv.org/abs/2405.19749), [P5](https://arxiv.org/abs/2203.13366).
+Generation is particularly natural when the output itself is semantic: a recommended query, autocomplete suggestion, rewrite, tag, category, or explanation. [GQR](https://arxiv.org/abs/2405.19749) directly frames query recommendation as generation; P5 covers multiple recommendation tasks through text-to-text learning.
 
 Here, reasoning means interpreting the available evidence and the user's likely intent to guide generation. It may be implicit or expressed through an intermediate intent description; generating a reasoning trace is not itself evidence that recommendation quality improves.
 
@@ -131,7 +131,7 @@ Generation can play at least two roles.
 
 The intermediate output might be textual intents, keywords, categories, or structured attributes. These require appropriate mapping and validation mechanisms; invented categories do not become grounded simply because they are structured. The focus here is on understanding and generating semantic content before retrieval, rather than predicting retrieval IDs.
 
-HyDE is a related example from information retrieval: it generates a hypothetical document, encodes it, and retrieves real documents from a corpus. The generated text supplies semantic context for a separate retrieval step. [HyDE](https://arxiv.org/abs/2212.10496).
+[HyDE](https://arxiv.org/abs/2212.10496) is a related example from information retrieval: it generates a hypothetical document, encodes it, and retrieves real documents from a corpus. The generated text supplies semantic context for a separate retrieval step.
 
 I think of this role as **semantic planning**: flexible generation proposes a direction, while retrieval and validation anchor the result to available content. This description does not imply that the model performs reliable multi-step reasoning.
 
@@ -141,7 +141,7 @@ My hypothesis is that improving **the evidence a model sees** can matter more th
 
 A prompt can explain the platform, the recommendation surface, and what a good result should look like. But relevant behavioral evidence, related queries, item metadata, or graph neighborhoods may provide information that instructions alone cannot supply.
 
-RA-GQR is a concrete example: it retrieves similar queries from logs to construct the prompt, and its paper reports improvements over the unaugmented GQR approach on its evaluation collections. That supports the usefulness of retrieved evidence in this setting; it does not establish a universal rule that grounding always beats prompt optimization. [Generating Query Recommendations via LLMs](https://arxiv.org/abs/2405.19749).
+[RA-GQR](https://arxiv.org/abs/2405.19749) is a concrete example: it retrieves similar queries from logs to construct the prompt, and its paper reports improvements over the unaugmented GQR approach on its evaluation collections. That supports the usefulness of retrieved evidence in this setting; it does not establish a universal rule that grounding always beats prompt optimization.
 
 The research question I take from this is:
 
@@ -159,7 +159,7 @@ A powerful teacher can generate candidate outputs or supporting rationales. Afte
 
 **Teacher → validated training outputs → SFT dataset → smaller model**
 
-Distilling Step-by-Step shows that LLM-produced rationales can help train smaller models on NLP tasks. It motivates the teacher–student idea, but is not evidence for this entire recommendation pipeline. Teacher outputs are synthetic supervision, not guaranteed high-quality labels. [Distilling Step-by-Step](https://arxiv.org/abs/2305.02301).
+[Distilling Step-by-Step](https://arxiv.org/abs/2305.02301) shows that LLM-produced rationales can help train smaller models on NLP tasks. It motivates the teacher–student idea, but is not evidence for this entire recommendation pipeline. Teacher outputs are synthetic supervision, not guaranteed high-quality labels.
 
 ### Stage 2: Controlled exploration
 
@@ -173,16 +173,16 @@ Higher temperature alone is not a well-defined exploration policy. The system ne
 
 The feedback can inform different optimization methods:
 
-- **DPO-style learning:** build justified, context-matched preferred / less-preferred output pairs and optimize their relative likelihood.
+- **[DPO](https://arxiv.org/abs/2305.18290)-style learning:** build justified, context-matched preferred / less-preferred output pairs and optimize their relative likelihood.
 - **RL-style optimization:** define a reward, account for the behavior policy and data collection process, and optimize the recommendation policy.
 
-DPO provides a preference-learning objective, not a method for automatically turning arbitrary click logs into valid preference pairs. [DPO](https://arxiv.org/abs/2305.18290).
+DPO provides a preference-learning objective, not a method for automatically turning arbitrary click logs into valid preference pairs.
 
-A concrete recommendation example of alignment from user interactions is OneRec-V2, which uses behavioral feedback with duration-aware reward shaping and policy-optimization adjustments. It supports the behavioral-alignment part of this discussion, not the claim that teacher-generated SFT is always its starting point. [OneRec-V2](https://arxiv.org/abs/2508.20900).
+A concrete recommendation example of alignment from user interactions is [OneRec-V2](https://arxiv.org/abs/2508.20900), which uses behavioral feedback with duration-aware reward shaping and policy-optimization adjustments. It supports the behavioral-alignment part of this discussion, not the claim that teacher-generated SFT is always its starting point.
 
 ## 6. Why direct behavioral feedback is attractive—and still biased
 
-A learned engagement model can be inaccurate or inherit biases from its training data. Optimizing a generator against that model can exploit its errors. OneRec-V2 discusses this motivation for using real user feedback. [OneRec-V2](https://arxiv.org/abs/2508.20900).
+A learned engagement model can be inaccurate or inherit biases from its training data. Optimizing a generator against that model can exploit its errors. OneRec-V2 discusses this motivation for using real user feedback.
 
 However, **real behavior is not unbiased ground truth**. Exposure, position, popularity, and selection affect what is observed. Clicks and dwell time also need not equal satisfaction. Unbiased Learning-to-Rank demonstrates why directly treating biased clicks as relevance labels can be problematic. [Unbiased Learning-to-Rank with Biased Feedback](https://arxiv.org/abs/1608.04468).
 
@@ -194,9 +194,9 @@ The appeal is progressively adding **task-specific behavioral supervision** to s
 
 ## 7. Important distinction: DPO versus GRPO
 
-**DPO** is naturally suited to preference pairs for the same conditioning context. It optimizes a policy relative to a reference model without explicitly fitting a separate reward model or sampling during the standard training objective. [DPO](https://arxiv.org/abs/2305.18290).
+**DPO** is naturally suited to preference pairs for the same conditioning context. It optimizes a policy relative to a reference model without explicitly fitting a separate reward model or sampling during the standard training objective.
 
-**GRPO**, introduced in DeepSeekMath, is a policy-optimization method that samples a group of outputs from a sampling policy and uses their relative rewards to form advantages. It avoids a separately trained critic. The original paper concerns mathematical reasoning, not a deployed recommendation system. [DeepSeekMath](https://arxiv.org/abs/2402.03300).
+**[GRPO](https://arxiv.org/abs/2402.03300)**, introduced in DeepSeekMath, is a policy-optimization method that samples a group of outputs from a sampling policy and uses their relative rewards to form advantages. It avoids a separately trained critic. The original paper concerns mathematical reasoning, not a deployed recommendation system.
 
 So I would avoid describing standard GRPO simply as an “off-policy update.” A more useful abstraction is:
 
@@ -205,7 +205,7 @@ So I would avoid describing standard GRPO simply as an “off-policy update.” 
 | DPO | Context-matched preference pairs | Logged engagement needs processing before it constitutes valid pairs |
 | GRPO / related RL methods | Sampled outputs and their rewards | Sampling policy, likelihood ratios, and update constraints matter |
 
-The original GRPO formulation can update using samples from an older policy with importance-ratio terms. It is therefore more precise to describe its sampling-and-update procedure than to impose an absolute on-policy / off-policy label. Replay and other variants introduce further design choices. [DeepSeekMath](https://arxiv.org/abs/2402.03300).
+The original GRPO formulation can update using samples from an older policy with importance-ratio terms. It is therefore more precise to describe its sampling-and-update procedure than to impose an absolute on-policy / off-policy label. Replay and other variants introduce further design choices.
 
 ## 8. A unified view
 
