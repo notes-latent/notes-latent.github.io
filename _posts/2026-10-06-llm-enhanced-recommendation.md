@@ -13,7 +13,7 @@ Reading public work on sequential recommendation and LLM-enhanced recommendation
 
 My working interpretation is that language models are useful where **semantic understanding and flexible context modeling matter**, while efficient recommendation components can handle **large-scale scoring and serving**.
 
-This article focuses on context modeling and grounded reasoning / text generation. Predicting item identifiers at the retrieval stage is a separate generative-retrieval topic that I plan to cover in its own note. The two directions here are a working mental model based on public research, not an exhaustive taxonomy or a claim that the entire industry is converging on one design.
+This article focuses on context modeling and grounded reasoning / text generation. Predicting item identifiers at the retrieval stage is a separate generative-retrieval topic. **A possible future note is retrieval ID prediction: using TIGER as a starting point to discuss how a model predicts catalog item IDs at the retrieval stage, and how that differs from context modeling and text recommendation generation.** The two directions here are a working mental model based on public research, not an exhaustive taxonomy or a claim that the entire industry is converging on one design.
 
 ## 2. Direction I: LLM as a context and sequence encoder
 
