@@ -27,7 +27,7 @@ A practical decomposition is:
 
 The expensive computation happens mainly on the context side and is amortized across candidates. This is an architectural option, not a guarantee of cheap serving: context length, model size, update frequency, caching, and latency still matter.
 
-HLLM is a concrete related example: an Item LLM extracts content representations, and a User LLM models the sequence of those representations to predict future interests. Its inputs are not simply a free-form textual transcript of user behavior. [HLLM](https://arxiv.org/abs/2409.12740).
+Netflix's **GenRec** is a concrete example: it verbalizes user interaction histories, item metadata, and request context as text, then uses an LLM to produce a pooled representation. A catalog-aware scoring head combines this representation with learned item embeddings to score items. Its prefill-only serving design consumes the context once and scores the candidate set in a single forward pass, avoiding step-by-step autoregressive recommendation generation. [GenRec: An LLM-Backed Recommendation Ranker at Netflix](https://arxiv.org/abs/2608.10257).
 
 ### 2.2 From feature engineering to context engineering
 
@@ -50,7 +50,7 @@ The shift I find useful is:
 - **Traditional sequential recommendation:** substantial effort goes into sequence architecture and input features.
 - **LLM-based sequence modeling:** more of the iteration may move toward context construction, event selection, compression, and representation format.
 
-Once a useful base encoder exists, some changes to the history representation may not require redesigning the architecture. This is my interpretation of a design opportunity; it does not mean feature schemas, recommendation-specific training, or model architecture cease to matter.
+GenRec explicitly describes this shift from feature engineering to context engineering. Once a useful base encoder exists, some changes to the history representation may not require redesigning the architecture. This is my interpretation of a design opportunity; it does not mean feature schemas, recommendation-specific training, or model architecture cease to matter. [GenRec](https://arxiv.org/abs/2608.10257).
 
 ### 2.3 Why this is useful
 
@@ -282,7 +282,7 @@ The papers below support specific mechanisms discussed above. Cross-domain paper
 1. Hidasi et al. (2015 preprint; ICLR 2016). [Session-based Recommendations with Recurrent Neural Networks](https://arxiv.org/abs/1511.06939). GRU4Rec.
 2. Kang and McAuley (2018). [Self-Attentive Sequential Recommendation](https://arxiv.org/abs/1808.09781). SASRec.
 3. Sun et al. (2019). [BERT4Rec: Sequential Recommendation with Bidirectional Encoder Representations from Transformer](https://arxiv.org/abs/1904.06690).
-4. Chen et al. (2024). [HLLM: Enhancing Sequential Recommendations via Hierarchical Large Language Models for Item and User Modeling](https://arxiv.org/abs/2409.12740).
+4. Li et al. (2026). [GenRec: An LLM-Backed Recommendation Ranker at Netflix](https://arxiv.org/abs/2608.10257).
 5. Nogueira, Jiang, and Lin (2020 arXiv version). [Document Ranking with a Pretrained Sequence-to-Sequence Model](https://arxiv.org/abs/2003.06713). Relevance-label generation for document ranking.
 6. Geng et al. (2022). [Recommendation as Language Processing (RLP): A Unified Pretrain, Personalized Prompt & Predict Paradigm (P5)](https://arxiv.org/abs/2203.13366).
 7. Gao et al. (2022 preprint; ACL 2023). [Precise Zero-Shot Dense Retrieval without Relevance Labels](https://arxiv.org/abs/2212.10496). HyDE.
