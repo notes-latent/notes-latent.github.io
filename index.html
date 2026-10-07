@@ -1,0 +1,21 @@
+---
+layout: default
+---
+<section class="intro">
+  <p class="eyebrow">Thinking out loud, one note at a time</p>
+  <h1>{{ site.title }}</h1>
+  <p class="description">{{ site.description }}</p>
+</section>
+<section aria-labelledby="notes-title">
+  <h2 id="notes-title" class="section-title">Notes <span>{{ site.posts | size }}</span></h2>
+  {% if site.posts.size > 0 %}
+  <ul class="notes">
+    {% for post in site.posts %}
+    <li><time datetime="{{ post.date | date_to_xmlschema }}">{{ post.date | date: '%Y-%m-%d' }}</time><a href="{{ post.url | relative_url }}">{{ post.title | escape }}</a>{% if post.description %}<p>{{ post.description | escape }}</p>{% endif %}</li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="empty">The notebook is open. The first note is still taking shape.</p>
+  {% endif %}
+</section>
+

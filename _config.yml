@@ -1,0 +1,28 @@
+title: Notes on Retrieval & Recommendation
+description: Paper notes, mental models, and unfinished thoughts on recommendation systems, retrieval, and LLMs.
+lang: en
+timezone: UTC
+baseurl: ""
+markdown: kramdown
+kramdown:
+  input: GFM
+  syntax_highlighter: rouge
+permalink: /notes/:title/
+defaults:
+  - scope:
+      path: ""
+    values:
+      layout: default
+  - scope:
+      path: ""
+      type: posts
+    values:
+      layout: post
+exclude:
+  - README.md
+  - Gemfile
+  - Gemfile.lock
+  - scripts
+  - vendor
+  - .bundle
+
