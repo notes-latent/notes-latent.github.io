@@ -1,5 +1,6 @@
 ---
 layout: post
+math: true
 title: "Multi-Target Future Interests & Generative Semantic IDs"
 description: "Living research notes on dense multi-interest representations, generative semantic IDs, and training-to-decoding alignment."
 ---
@@ -24,7 +25,7 @@ Two design choices caught my attention:
 
 Together, these motivate the broader question: **Can a relatively infrequently updated user representation anticipate multiple future interests and be reused by retrieval and ranking?**
 
-The first entry (Sections 1–4) focuses on **dense user representations**, including whether dense multi-positive training has its **own** top-K/set-coverage mismatch (§2.3). The second entry (Section 5) tracks my **Generative SID / retrieval** readings and the unresolved multi-target-to-top-K decoding problem. The shared paper reading tracker is kept privately.
+The first entry (Sections 1–4) focuses on **dense user representations**, including whether dense multi-positive training has its **own** top-K/set-coverage mismatch (§2.3). The second entry (Section 5) tracks my **Generative SID / retrieval** readings and the unresolved multi-target-to-top-K decoding problem.
 
 ## 2. Two dense-representation approaches
 
@@ -37,7 +38,7 @@ The first entry (Sections 1–4) focuses on **dense user representations**, incl
 
 Let `h(H)` be the current user embedding and `v_j` the embedding of future positive item `j`. A simplified objective is:
 
-```text
+```math
 \mathcal{L}_{\mathrm{multi-positive}} = \frac{1}{M}\sum_{j=1}^{M}\ell_{\mathrm{InfoNCE}}(h(H),v_j).
 ```
 
@@ -51,7 +52,7 @@ An experiment should stratify by **future-interest diversity/entropy**. The pred
 
 Let an encoder/decoder emit `K` interest vectors `U(H)=\{u_1,\dots,u_K\}`. A common hard assignment is:
 
-```text
+```math
 k^*(j) = \arg\max_k\, u_k^\top v_j.
 ```
 
@@ -71,7 +72,7 @@ Pinterest's 2025 DCM associates positives with interest-conditioned output embed
 
 A common single-vector training setup, suppressing the details of sampled negatives, is:
 
-```text
+```math
 \mathcal L_{\rm dense}=-\sum_{j\in\mathcal P(H)}w_j\log\frac{e^{s(H,v_j)/\tau}}{\sum_{i\in\mathcal C}e^{s(H,v_i)/\tau}},\qquad s(H,v)=h(H)^\top v.
 ```
 
@@ -111,7 +112,7 @@ The **shared mismatch** appears when the desired target is instead *a set of dis
 
 The model may emit up to `K_{\max}=30` slots, but it should only use as many as are warranted for each user. For slot `k`:
 
-```text
+```math
 u_k=\mathrm{normalize}(W_e z_k),\quad p_k=\sigma(g_p(z_k)),\quad a_k=g_w(z_k).
 ```
 
@@ -122,8 +123,12 @@ u_k=\mathrm{normalize}(W_e z_k),\quad p_k=\sigma(g_p(z_k)),\quad a_k=g_w(z_k).
 
 **A potential loss:**
 
-```text
-\mathcal{L}=\mathcal{L}_{\mathrm{retrieval}}+\lambda_s\mathcal{L}_{\mathrm{soft-set}}+\lambda_l\mathcal{L}_{\mathrm{listwise}}+\lambda_p\mathcal{L}_{\mathrm{presence}}+\lambda_d\mathcal{L}_{\mathrm{diversity}}+\lambda_b\mathcal{L}_{\mathrm{budget}}.
+```math
+\begin{aligned}
+\mathcal{L}={}&\mathcal{L}_{\mathrm{retrieval}}+\lambda_s\mathcal{L}_{\mathrm{soft-set}}\\
+&+\lambda_l\mathcal{L}_{\mathrm{listwise}}+\lambda_p\mathcal{L}_{\mathrm{presence}}\\
+&+\lambda_d\mathcal{L}_{\mathrm{diversity}}+\lambda_b\mathcal{L}_{\mathrm{budget}}.
+\end{aligned}
 ```
 
 These are *proposed components*, not a published joint objective:
@@ -201,7 +206,7 @@ I want to test three interventions **separately** before combining them: **soft 
 
 ### 5.1. Papers I actually read and critiqued — original mechanisms and *my* doubts
 
-**Status rule:** Entries in this table have **directly documented personal technical questions or critiques** from our conversations, including PLUM. “Read and discussed” means we examined specific paper mechanisms, not that every section has been audited. Papers introduced only by the assistant are **TBD** in my private reading tracker. The other dense papers may be *discussed in detail* without a confirmed independent full-paper reading.
+**Status rule:** Entries in this table have **directly documented personal technical questions or critiques** from our conversations, including PLUM. “Read and discussed” means we examined specific paper mechanisms, not that every section has been audited. Papers introduced only by the assistant remain **TBD**. The other dense papers may be *discussed in detail* without a confirmed independent full-paper reading.
 
 | Paper · source | What it actually does / strongest reported evidence | My observation / unresolved critique | Where I should update next |
 |---|---|---|---|
@@ -232,13 +237,13 @@ I want to test three interventions **separately** before combining them: **soft 
 
 **A. Independent multi-positive training** — same context, several possible outputs (closer to training LMs on alternative correct responses as separate examples):
 
-```text
+```math
 \mathcal L_{\mathrm{ind}}=-\sum_{i=1}^M w_i\log P_\theta(s_i\mid H).
 ```
 
 **B. TokenMinds-style chained multi-target training** — decoder factors the sampled future sequence, also conditioning on previously selected targets:
 
-```text
+```math
 \mathcal L_{\mathrm{chain}}=-\sum_{i=1}^M w_i\log P_\theta(s_i\mid H,s_{<i}),
 ```
 
