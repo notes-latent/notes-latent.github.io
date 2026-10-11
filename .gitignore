@@ -8,3 +8,4 @@ vendor/
 .env
 .env.*
 AGENTS.md
+private/

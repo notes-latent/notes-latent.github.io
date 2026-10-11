@@ -19,6 +19,7 @@ defaults:
     values:
       layout: post
 exclude:
+  - private
   - AGENTS.md
   - README.md
   - Gemfile
