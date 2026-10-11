@@ -201,7 +201,7 @@ I want to test three interventions **separately** before combining them: **soft 
 
 **Current decision:** The strongest *published* support is for **multi-future training** (PinnerFormer/PinFM), **anti-collapse matching and active-slot gating** (DCM/SetMIR), and the importance of **retrieval allocation** (MIP/DCM). My full proposal—**permutation-aware soft set matching + listwise supervision + learned budget allocation**—remains an **untested combination**. I should validate each component independently before claiming an overall solution.
 
-## 5. Research Entry — Generative Retrieval with Semantic IDs
+## 5. Research Entry — Generative Retrieval with Semantic IDs *(To be organized)*
 
 **Added:** 2026-10-11
 **Scope:** *My* reading history, interpretations, outstanding evidence, and a concrete next-reading agenda. This is deliberately **not** a generic SID survey. It distinguishes **generating item identifiers**, **using SIDs as ranking features**, **generating coarse user-interest tokens**, **compressing features as soft tokens**, and **optimizing inference**.
