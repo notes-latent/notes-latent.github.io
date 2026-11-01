@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="480" height="834" viewBox="0 0 480 834" role="img" aria-labelledby="title desc">
+<title id="title">How the KV cache grows</title><desc id="desc">Prefill caches the prompt. Selecting A and B adds no KV. Processing each token extends its own history. Selecting complete two-level SIDs ends generation.</desc>
+<defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8" fill="#526477"/></marker></defs>
+<rect width="480" height="834" rx="12" fill="#f7f9fc"/>
+<text x="24" y="42" font-family="sans-serif" font-size="24" fill="#172b40">How the KV cache grows</text>
+<g class="card"><rect x="24" y="76" width="432" height="114" rx="9" fill="#e2eefb" stroke="#b5c4d3"/>
+<text x="40" y="106" font-family="sans-serif" font-size="20" font-weight="600" fill="#172b40">1. Prefill the prompt</text>
+<text x="40" y="136" font-family="sans-serif" font-size="20" font-weight="400" fill="#172b40">Cache: prompt K/V</text>
+<text x="40" y="166" font-family="sans-serif" font-size="20" font-weight="400" fill="#172b40">Output: scores for A, B, C</text>
+</g>
+<path d="M240,190 L240,222" fill="none" stroke="#526477" stroke-width="2" marker-end="url(#arrow)"/>
+<g class="card"><rect x="24" y="230" width="432" height="84" rx="9" fill="#fff0d8" stroke="#b5c4d3"/>
+<text x="40" y="260" font-family="sans-serif" font-size="20" font-weight="600" fill="#172b40">2. Select A and B</text>
+<text x="40" y="290" font-family="sans-serif" font-size="20" font-weight="400" fill="#172b40">The cache has not grown yet.</text>
+</g>
+<path d="M160,314 L128,348" fill="none" stroke="#526477" stroke-width="2" marker-end="url(#arrow)"/>
+<path d="M320,314 L352,348" fill="none" stroke="#526477" stroke-width="2" marker-end="url(#arrow)"/>
+<g class="card"><rect x="24" y="356" width="208" height="144" rx="9" fill="#e2eefb" stroke="#b5c4d3"/>
+<text x="40" y="386" font-family="sans-serif" font-size="19" font-weight="600" fill="#172b40">3. Process A</text>
+<text x="40" y="416" font-family="sans-serif" font-size="19" font-weight="400" fill="#172b40">Cache:</text>
+<text x="40" y="446" font-family="sans-serif" font-size="19" font-weight="400" fill="#172b40">prompt + A</text>
+<text x="40" y="476" font-family="sans-serif" font-size="19" font-weight="400" fill="#172b40">Score A1, A2…</text>
+</g>
+<g class="card"><rect x="248" y="356" width="208" height="144" rx="9" fill="#e2eefb" stroke="#b5c4d3"/>
+<text x="264" y="386" font-family="sans-serif" font-size="19" font-weight="600" fill="#172b40">3. Process B</text>
+<text x="264" y="416" font-family="sans-serif" font-size="19" font-weight="400" fill="#172b40">Cache:</text>
+<text x="264" y="446" font-family="sans-serif" font-size="19" font-weight="400" fill="#172b40">prompt + B</text>
+<text x="264" y="476" font-family="sans-serif" font-size="19" font-weight="400" fill="#172b40">Score B1, B2…</text>
+</g>
+<path d="M128,500 L180,534" fill="none" stroke="#526477" stroke-width="2" marker-end="url(#arrow)"/>
+<path d="M352,500 L300,534" fill="none" stroke="#526477" stroke-width="2" marker-end="url(#arrow)"/>
+<g class="card"><rect x="24" y="542" width="432" height="114" rx="9" fill="#e0f2e8" stroke="#b5c4d3"/>
+<text x="40" y="572" font-family="sans-serif" font-size="20" font-weight="600" fill="#172b40">4. Select complete SIDs</text>
+<text x="40" y="602" font-family="sans-serif" font-size="20" font-weight="400" fill="#172b40">For example: A1, A2, B1</text>
+<text x="40" y="632" font-family="sans-serif" font-size="20" font-weight="400" fill="#172b40">Two levels? Return them now.</text>
+</g>
+<g class="card"><rect x="24" y="692" width="432" height="114" rx="9" fill="#fff0d8" stroke="#b5c4d3"/>
+<text x="40" y="722" font-family="sans-serif" font-size="19" font-weight="600" fill="#172b40">Only if a third level is needed:</text>
+<text x="40" y="752" font-family="sans-serif" font-size="19" font-weight="400" fill="#172b40">A1 and A2 continue from A’s cache.</text>
+<text x="40" y="782" font-family="sans-serif" font-size="19" font-weight="400" fill="#172b40">B1 continues from B’s cache.</text>
+</g>
+</svg>
