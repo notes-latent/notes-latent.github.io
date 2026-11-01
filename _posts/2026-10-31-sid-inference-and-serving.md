@@ -138,8 +138,6 @@ For a fixed two-token SID, there is no reason to run another forward on 1 merely
 
 ### Follow several beams through the cache
 
-![KV cache timing and parent selection for SID beams](/assets/diagrams/sid-kv-flow.svg)
-
 After selecting A and B, both branches start from the prompt cache. Processing A produces `KV(prompt,A)`; processing B produces `KV(prompt,B)`. Suppose the next selection keeps A1, A2 and B1:
 
 ```python
@@ -399,9 +397,9 @@ These are proposed decision criteria, not benchmark results. Free GPU memory and
 
 ### If I do adopt it, where does the decoding loop go?
 
-![Decision path from the current Torch service to a possible Triton Server deployment](/assets/diagrams/sid-serving-flow.svg)
+For this short, fixed-depth SID model, keep the entire decoding loop inside one backend invocation. Triton schedules requests; the backend runs encoding or prefill, candidate selection and subsequent model forwards, then returns complete SIDs.
 
-One possible integration keeps the entire SID loop inside a backend invocation. The Python backend's `execute(requests)` receives requests; the implementation assembles compatible input tensors, executes the batched model and returns the corresponding responses. Merely looping over requests and calling the model once per request does not make the GPU computation batched. [Triton Python backend](https://docs.nvidia.com/deeplearning/triton-inference-server/user-guide/docs/python_backend/README.html).
+The Python backend's `execute(requests)` receives requests; the implementation assembles compatible input tensors, executes the batched model and returns the corresponding responses. Merely looping over requests and calling the model once per request does not make the GPU computation batched. [Triton Python backend](https://docs.nvidia.com/deeplearning/triton-inference-server/user-guide/docs/python_backend/README.html).
 
 ```python
 # Conceptual backend structure, not a complete Triton deployment.
@@ -428,22 +426,22 @@ I would compare the existing service with a Triton-hosted version of the **same 
 
 If the current service already meets the target, introducing another serving layer needs a concrete benefit. If it misses the target, I first want to name the dominant term—queueing, model execution, selection, transfer or launch overhead—and explain why the proposed change reduces it. **The next step is a measurement of the current Torch path, not a migration triggered by the word “generative.”**
 
-### A small GPU check: Torch HTTP versus Triton Server
+### A small GPU check: FastAPI versus Triton, both running PyTorch eager
 
-A synthetic encode-once model was served through both a small Torch HTTP service and an actual Triton Inference Server process. The model uses pooled input embeddings, a shared representation, and two conditional SID heads—about 10,000 parameters. This checks the serving boundary; it does not compare Transformer architectures or paged KV implementations.
+A synthetic encode-once model was served through both a FastAPI/Uvicorn service and an actual Triton Inference Server process. Both called the ordinary Python model directly, using PyTorch eager execution. The model uses pooled input embeddings, a shared representation, and two conditional SID heads—about 10,000 parameters. This checks the serving boundary; it does not compare Transformer architectures or paged KV implementations.
 
-Both services ran sequentially on the same single CUDA GPU, using the same FP32 eager Torch computation, fixed weights, 45-token inputs, two SID levels and beam width 16. The baseline was one FastAPI/Uvicorn process with one GPU worker. The Triton path used PyTriton 0.7.0 with Triton Server 2.51.0 and its Python proxy; it did not use a TensorRT engine. Both used the same local HTTP client and JSON tensor protocol, including input and output transfers.
+Both services ran sequentially on the same single CUDA GPU, using the same FP32 eager Torch computation, fixed weights, 45-token inputs, two SID levels and beam width 16. The baseline was one FastAPI/Uvicorn process with one GPU worker. The Triton path used PyTriton 0.7.0 with Triton Server 2.51.0 and its Python proxy. Neither path used TorchScript, CUDA Graph replay or a TensorRT engine. Both used the same local HTTP client and JSON tensor protocol, including input and output transfers. This is a comparison of two serving integrations around an eager model, not a comparison of execution optimizations.
 
 The table shows short closed-loop runs: each client submits its next request after the previous response. Each service configuration received 100 warm-up requests, followed by 1,000 measured requests at each concurrency setting. When maximum batch size was eight, both implementations used a configured batching wait of 200 microseconds. Their actual batch sizes and scheduling behavior still differed.
 
 | Service | Max batch | Concurrent clients | Requests/s, rounded | p50 (ms) | p99 (ms) |
 | --- | --- | --- | --- | --- | --- |
-| Torch HTTP | 1 | 1 | 680 | 1.48 | 2.14 |
-| Triton + Python proxy | 1 | 1 | 230 | 4.45 | 5.31 |
-| Torch HTTP | 1 | 8 | 1,080 | 6.08 | 13.83 |
-| Triton + Python proxy | 1 | 8 | 350 | 23.14 | 30.32 |
-| Torch HTTP | 8 | 8 | 1,430 | 4.43 | 13.65 |
-| Triton + Python proxy | 8 | 8 | 710 | 11.72 | 17.21 |
+| FastAPI + PyTorch eager | 1 | 1 | 680 | 1.48 | 2.14 |
+| Triton + PyTriton, eager | 1 | 1 | 230 | 4.45 | 5.31 |
+| FastAPI + PyTorch eager | 1 | 8 | 1,080 | 6.08 | 13.83 |
+| Triton + PyTriton, eager | 1 | 8 | 350 | 23.14 | 30.32 |
+| FastAPI + PyTorch eager | 8 | 8 | 1,430 | 4.43 | 13.65 |
+| Triton + PyTriton, eager | 8 | 8 | 710 | 11.72 | 17.21 |
 
 Across 16 input examples, selected SIDs matched exactly and scores passed `allclose` with absolute and relative tolerances of `2e-5`. All measured requests completed without errors. At 32 concurrent clients, p99 ranged from roughly 100 to 280 ms across configurations; these brief measurements are sensitive to client and runtime effects. An additional fixed-rate attempt overloaded the unbatched Triton path and accumulated substantial client scheduling delay, so it is not used here as a clean arrival-rate comparison.
 
