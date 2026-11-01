@@ -11,7 +11,7 @@ That question connects to another one: how do I make the generated SIDs more div
 
 This note follows that execution path: **model forward → candidate selection → another forward, if needed → SID lookup and ranking**. I use familiar LLM decoding methods as a starting point, then check which assumptions actually apply to a short, structured SID output. Pseudocode makes the boundaries explicit; a small executable SID example lets me check what each selector really does.
 
-**Status:** Study note · Executable decoding examples and a small GPU execution check; production serving remains to be validated.
+**Status:** Study note · Executable decoding examples, GPU execution checks and a small HTTP serving comparison; production behavior remains to be validated.
 
 Related notes: [Constructing good SIDs](/notes/constructing-good-semantic-ids-for-llm-prediction/) · [Intent-aware retrieval sets](/notes/from-semantic-ids-to-intent-aware-retrieval-sets/)
 
@@ -462,6 +462,38 @@ The table reports the median of three rounds' p50 model-call times. Each round u
 For each batch size, 16 input examples produced identical selected SIDs across the three paths; scores passed checks with absolute and relative tolerances of `2e-5`. These are whole-call timings, including CPU submission overhead, rather than isolated GPU kernel durations. They exclude HTTP/RPC, host-to-device input transfer, response serialization and request queueing.
 
 CUDA Graph reduced model-call time in this small fixed-shape example. The measurement does not establish end-to-end service capacity or favor one inference server over another. That comparison still requires the actual serving stack, equivalent model execution and a representative request load.
+
+### HTTP serving check: TorchServe / Netty versus Triton
+
+The model-call timings above leave out the server. This second experiment compares two complete HTTP serving integrations:
+
+- [TorchServe](https://docs.pytorch.org/serve/FAQs.html), including its Netty HTTP frontend, request batching and one Python model worker.
+- Triton Inference Server with PyTriton, including Triton's HTTP frontend and batching, followed by the Python proxy and model callable.
+
+Both call the same SID runtime. Each integration is tested with eager execution, TorchScript (`script` + `freeze`), and CUDA Graph. The graph variant has a separate capture for every batch size from one through eight, so dynamic batching can choose any supported size.
+
+The same synthetic model, weights, FP32 precision, input length, SID depth, beam width and single CUDA GPU are used throughout. Both services have one model worker, maximum batch size eight, a configured maximum batching wait of 1 ms, and two HTTP frontend threads. System metric collection is disabled in both. The versions are TorchServe 0.12.0 with Java 21, and Triton Server 2.51.0 with PyTriton 0.7.0. The Triton integration executes the model through Python; it does not use Triton's native LibTorch or TensorRT backend.
+
+The client sends one example per HTTP JSON request on the same host. Each concurrency setting receives 100 warm-up requests before each of three timed rounds, with 400 measured requests per round. The measurements include request handling, queueing, transfers, model execution, response processing and client-side result decoding. Compilation and graph capture occur during initialization. This is a closed-loop load: each client waits for its response before sending another request.
+
+**C1** means one concurrent client; **C8** means eight. The p50 and throughput columns report medians of the three round-level summaries. The final column shows the full range of the three p99 measurements, preserving the observed tail-latency variation.
+
+| HTTP serving integration | Execution | C1 p50 (ms) | C8 p50 (ms) | C8 requests/s | C8 p99 range (ms) |
+| --- | --- | --- | --- | --- | --- |
+| TorchServe / Netty | Eager | 4.00 | 5.96 | 1,234 | 7.58–95.59 |
+| Triton / PyTriton | Eager | 5.34 | 10.92 | 722 | 14.76–22.11 |
+| TorchServe / Netty | TorchScript | 3.26 | 7.08 | 1,076 | 7.98–105.15 |
+| Triton / PyTriton | TorchScript | 5.07 | 11.15 | 728 | 13.25–15.63 |
+| TorchServe / Netty | CUDA Graph | 2.48 | 5.56 | 1,304 | 8.15–119.66 |
+| Triton / PyTriton | CUDA Graph | 4.18 | 9.33 | 823 | 12.84–23.47 |
+
+Runtime checks cover every batch size from one through eight, and 16 HTTP input examples are compared across all six variants. Selected SIDs match exactly; scores pass checks with absolute and relative tolerances of `2e-5`. All timed requests complete successfully.
+
+Matching the maximum batch size does not produce identical batches. At C8, the mean executed batch size is approximately 3.7–4.0 for TorchServe and 3.2 for Triton in this experiment. That difference is part of the observed scheduling behavior.
+
+TorchServe has lower median latency and higher observed C8 throughput in these configurations, but its first measured C8 round also shows substantial tail spikes even after warm-up. Their cause has not been isolated. The experiment does not attribute the gap specifically to Netty, batching, proxy communication or model execution.
+
+These results apply to this small model and these two Python integrations. A deployment decision still requires the actual model, serving configuration, arrival pattern and latency target. In particular, the PyTriton result cannot stand in for every Triton backend.
 
 ## 10. Executable check: one tree, several decoding methods
 
