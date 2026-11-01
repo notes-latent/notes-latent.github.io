@@ -11,7 +11,7 @@ That question connects to another one: how do I make the generated SIDs more div
 
 This note follows that execution path: **model forward → candidate selection → another forward, if needed → SID lookup and ranking**. I use familiar LLM decoding methods as a starting point, then check which assumptions actually apply to a short, structured SID output. Pseudocode makes the boundaries explicit; a small executable SID example lets me check what each selector really does.
 
-**Status:** Study note · Executable decoding examples and a small GPU serving check; production behavior still needs validation on the actual model.
+**Status:** Study note · Executable decoding examples and a small GPU execution check; production serving remains to be validated.
 
 Related notes: [Constructing good SIDs](/notes/constructing-good-semantic-ids-for-llm-prediction/) · [Intent-aware retrieval sets](/notes/from-semantic-ids-to-intent-aware-retrieval-sets/)
 
@@ -348,7 +348,7 @@ This is why I want separate measurements for candidate generation and final-set 
 
 ## 9. Do I need Triton Inference Server, or is the current Torch service enough?
 
-**My starting decision is to keep the existing Torch service. I do not yet have evidence that introducing Triton Inference Server would improve this workload enough to justify the change.** The model now generates SIDs, but that alone does not create a new serving requirement. The question is whether the existing service can execute the retrieval loop at the required throughput, p99 latency and cost.
+**The starting point is the actual inference service: its request handling, batching, workers and model runtime.** Generating SIDs alone does not establish a need to replace it. The question is whether that service can execute the retrieval loop at the required throughput, p99 latency and cost. A small HTTP wrapper built for an experiment cannot stand in for the existing deployment when making this decision.
 
 The earlier sections make this decision more concrete. An encode-once model runs its encoder and conditional heads. An autoregressive model runs prefill, candidate selection and the subsequent decode step, with a KV cache if useful. Both can be implemented in Torch and kept inside one request. Beam search, prefix penalties and cache reordering do not require a new inference server.
 
@@ -374,7 +374,7 @@ def retrieve_sid_batch(x, model, width, architecture):
     return select_sid_pairs(sid1, score1, second_logits, width)
 ```
 
-The current service owns request handling and batching; the model code owns this computation. In the autoregressive branch, the KV cache is temporary state inside this execution. It can be released when the SID results are complete. There is no need to turn L1 and L2 into separate client requests merely because the model is autoregressive.
+In this design, the serving layer owns request handling and batching; the model code owns this computation. In the autoregressive branch, the KV cache is temporary state inside this execution. It can be released when the SID results are complete. There is no need to turn L1 and L2 into separate client requests merely because the model is autoregressive.
 
 B counts requests and W counts hypotheses within each request. The second autoregressive forward may process B×W rows, while the service still handles B requests. Increasing W can therefore change memory and latency substantially without changing the number of incoming requests.
 
@@ -426,26 +426,42 @@ I would compare the existing service with a Triton-hosted version of the **same 
 
 If the current service already meets the target, introducing another serving layer needs a concrete benefit. If it misses the target, I first want to name the dominant term—queueing, model execution, selection, transfer or launch overhead—and explain why the proposed change reduces it. **The next step is a measurement of the current Torch path, not a migration triggered by the word “generative.”**
 
-### A small GPU check: FastAPI versus Triton, both running PyTorch eager
+### Model execution check: eager, TorchScript and CUDA Graph
 
-A synthetic encode-once model was served through both a FastAPI/Uvicorn service and an actual Triton Inference Server process. Both called the ordinary Python model directly, using PyTorch eager execution. The model uses pooled input embeddings, a shared representation, and two conditional SID heads—about 10,000 parameters. This checks the serving boundary; it does not compare Transformer architectures or paged KV implementations.
+These names describe model execution, while Triton Server describes a serving system:
 
-Both services ran sequentially on the same single CUDA GPU, using the same FP32 eager Torch computation, fixed weights, 45-token inputs, two SID levels and beam width 16. The baseline was one FastAPI/Uvicorn process with one GPU worker. The Triton path used PyTriton 0.7.0 with Triton Server 2.51.0 and its Python proxy. Neither path used TorchScript, CUDA Graph replay or a TensorRT engine. Both used the same local HTTP client and JSON tensor protocol, including input and output transfers. This is a comparison of two serving integrations around an eager model, not a comparison of execution optimizations.
+| Mechanism | What changes |
+| --- | --- |
+| PyTorch eager | Python executes the model and dispatches its operations as it runs. |
+| [TorchScript](https://docs.pytorch.org/docs/2.10/jit.html) | The model is converted to a serializable executable program; this test uses `torch.jit.script` followed by `freeze`. |
+| [CUDA Graph](https://docs.pytorch.org/docs/2.10/notes/cuda.html#cuda-graphs) | A compatible sequence of GPU operations is captured and replayed, reducing repeated CPU dispatch and launch work. |
 
-The table shows short closed-loop runs: each client submits its next request after the previous response. Each service configuration received 100 warm-up requests, followed by 1,000 measured requests at each concurrency setting. When maximum batch size was eight, both implementations used a configured batching wait of 200 microseconds. Their actual batch sizes and scheduling behavior still differed.
+CUDA Graph normally preserves the kernels rather than rewriting or fusing them. Each replay computes on new input data. For the same part of a model, a request can use ordinary execution or graph replay; a larger system can use both for different paths. A graph can also capture compatible work produced by a TorchScript model. TorchScript is deprecated in the PyTorch version used here; it is included to examine an existing deployment path.
 
-| Service | Max batch | Concurrent clients | Requests/s, rounded | p50 (ms) | p99 (ms) |
-| --- | --- | --- | --- | --- | --- |
-| FastAPI + PyTorch eager | 1 | 1 | 680 | 1.48 | 2.14 |
-| Triton + PyTriton, eager | 1 | 1 | 230 | 4.45 | 5.31 |
-| FastAPI + PyTorch eager | 1 | 8 | 1,080 | 6.08 | 13.83 |
-| Triton + PyTriton, eager | 1 | 8 | 350 | 23.14 | 30.32 |
-| FastAPI + PyTorch eager | 8 | 8 | 1,430 | 4.43 | 13.65 |
-| Triton + PyTriton, eager | 8 | 8 | 710 | 11.72 | 17.21 |
+```python
+# Conceptual pseudocode: capture once, then run new requests.
+# Setup includes warm-up and compatible fixed shapes / memory addresses.
+graph, output_buffer = capture_gpu_work(model, input_buffer)
 
-Across 16 input examples, selected SIDs matched exactly and scores passed `allclose` with absolute and relative tolerances of `2e-5`. All measured requests completed without errors. At 32 concurrent clients, p99 ranged from roughly 100 to 280 ms across configurations; these brief measurements are sensitive to client and runtime effects. An additional fixed-rate attempt overloaded the unbatched Triton path and accumulated substantial client scheduling delay, so it is not used here as a clean arrival-rate comparison.
+def run_request(new_input):
+    input_buffer.copy_(new_input)
+    graph.replay()
+    return output_buffer  # Consume or copy before this buffer is reused.
+```
 
-For this tiny computation and this integration, the check gives no performance reason to replace the Torch service. Dynamic batching helps the Triton path, but a Torch service can also batch requests. These observations do not establish production capacity, identify every source of overhead, or predict the performance of an optimized Triton backend on a larger model. The practical decision remains to measure the actual model under its latency target.
+A synthetic encode-once SID model was measured on the same single CUDA GPU with fixed weights, FP32, 45-token inputs, two SID levels and beam width 16. It uses pooled embeddings, a shared representation and two conditional heads, totaling about 10,000 parameters. The execution comparison used PyTorch 2.10.0 and separate CUDA Graph captures for batch sizes one and eight.
+
+The table reports the median of three rounds' p50 model-call times. Each round used 50 warm-up calls and 200 timed calls; execution order rotated between rounds. Inputs were already on the GPU. Wall-clock timing included synchronization after each call, and the graph path included copying input into its persistent GPU buffer. Compilation and capture setup were outside the timed calls.
+
+| Execution path | Batch 1 (ms/call) | Batch 8 (ms/call) |
+| --- | --- | --- |
+| PyTorch eager | 0.242 | 0.235 |
+| TorchScript: script + freeze | 0.204 | 0.198 |
+| CUDA Graph captured from eager | 0.066 | 0.069 |
+
+For each batch size, 16 input examples produced identical selected SIDs across the three paths; scores passed checks with absolute and relative tolerances of `2e-5`. These are whole-call timings, including CPU submission overhead, rather than isolated GPU kernel durations. They exclude HTTP/RPC, host-to-device input transfer, response serialization and request queueing.
+
+CUDA Graph reduced model-call time in this small fixed-shape example. The measurement does not establish end-to-end service capacity or favor one inference server over another. That comparison still requires the actual serving stack, equivalent model execution and a representative request load.
 
 ## 10. Executable check: one tree, several decoding methods
 
