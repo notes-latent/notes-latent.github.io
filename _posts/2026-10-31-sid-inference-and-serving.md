@@ -2,99 +2,144 @@
 layout: post
 math: true
 title: "SID Inference and Serving"
-description: "From two-level SID prediction to decoding, candidate diversity, and GPU serving: a research note with pseudocode and executable examples."
+description: "Autoregressive Transformer inference for two-level SIDs: full recomputation, KV caching, decoding, candidate diversity and serving."
 ---
 
 I have been spending time on SID-based generative retrieval, first thinking about how to construct the IDs and then about what a retrieved set should cover. More recently, I started wondering what happens when this model has to serve requests. Can the GPU cluster that serves an ordinary prediction model also serve a generative retriever? What changes when a request produces several candidate paths rather than one prediction?
 
 That question connects to another one: how do I make the generated SIDs more diverse, and which decoding choices might broaden relevant intent coverage? Before choosing a serving framework or a diversity objective, I wanted to understand exactly what runs between the input and the final candidate set.
 
-This note follows that execution path: **model forward → candidate selection → another forward, if needed → SID lookup and ranking**. I use familiar LLM decoding methods as a starting point, then check which assumptions actually apply to a short, structured SID output. Pseudocode makes the boundaries explicit; a small executable SID example lets me check what each selector really does.
+This note follows one model architecture through **autoregressive Transformer → beam search → SID resolution → ranking**. I use familiar LLM decoding methods to understand how candidate selection can change while the model stays the same. Pseudocode makes the forwards, beam expansion and KV reuse explicit; a small executable SID example lets me check what each selector really does.
 
-**Status:** Study note · Executable decoding examples, GPU execution checks and a small HTTP serving comparison; production behavior remains to be validated.
+**Status:** Study note · Executable selector examples; measurements comparing full recomputation and KV-cached execution of the same Transformer remain to be completed.
 
 Related notes: [Constructing good SIDs](/notes/constructing-good-semantic-ids-for-llm-prediction/) · [Intent-aware retrieval sets](/notes/from-semantic-ids-to-intent-aware-retrieval-sets/)
 
-## 1. Start with the execution path
+## 1. The Actual SID Inference Path
 
-```text
-Request arrives
-    ↓
-Queue and batch requests                 serving scheduler
-    ↓
-Encode input / prefill                   model computation
-    ↓
-Next-token logits
-    ↓
-Select parent paths and SID tokens       decoding algorithm
-    ↓
-Conditional head OR another forward      model computation
-    ↓
-Resolve SIDs → rank candidates → respond
-```
-
-The GPU executes the tensor operations in this path. The serving system decides which requests run together and when. Beam search decides which hypotheses survive. These decisions interact, but they belong to different layers.
-
-The first question is therefore more concrete than “does this model generate SIDs?”:
-
-> **After selecting the first SID token, does the second level run a lightweight conditional head, or another Transformer forward?**
-
-Both architectures can represent the same factorization:
+This note assumes an autoregressive Transformer that generates a fixed two-level Semantic ID, `(S1, S2)`, conditioned on a prompt x. Its probability factorization is:
 
 ```math
-P(s_1,s_2\mid x)=P(s_1\mid x)P(s_2\mid x,s_1).
+P(S_1,S_2\mid x)=P(S_1\mid x)P(S_2\mid x,S_1).
 ```
 
-They can have very different execution costs. Both can generate several candidate paths with beam search. Branching alone does not favor one architecture; retrieval quality and serving cost need to be evaluated. Two SID levels do not imply two Transformer layers, beam width two, or a particular KV-cache requirement.
+```text
+Incoming requests
+    ↓
+Request queue and batching
+    ↓
+Transformer forward on prompt
+    ↓
+L1 logits: P(S1 | prompt)
+    ↓
+Select top-W S1 tokens per request
+    ↓
+Transformer forward conditioned on each selected S1
+    ↓
+L2 logits: P(S2 | prompt, S1)
+    ↓
+Accumulate log probabilities
+    ↓
+Select top-K complete SID sequences per request
+    ↓
+Validate and resolve SIDs to candidates
+    ↓
+Optional downstream ranking
+    ↓
+Return results
+```
 
-## 2. Two ways to produce a two-level SID
+Both SID levels are predicted by the **same autoregressive Transformer**. The second forward incorporates the selected S1 token into the context. It uses the same model parameters as the first forward.
 
-### Encode once, then use conditional heads
+The GPU executes the model's tensor operations. The serving system decides which requests run together and when. Beam search decides which hypotheses survive within each request. Two SID levels mean two generation steps; they do not specify the number of Transformer layers or the beam width.
 
-The input is encoded once. A first head predicts L1; a second head takes the shared representation and each selected L1 token to predict L2.
+## 2. One Autoregressive Model, Two Execution Paths
+
+The comparison is **full recomputation without KV cache versus incremental decoding with KV cache**. Both paths use the same Transformer, weights and probability factorization. Caching changes how historical computation is reused.
+
+The pseudocode uses B requests, prompt length T, first-level beam width W, final candidate count K, and second-level vocabulary size V2. It shows equal-length prompts for clarity. Attention masks and position IDs are implicit in the model calls and must remain equivalent across both paths, including when prompts are padded.
+
+### Baseline: Full Recomputation Without KV Cache
+
+The baseline performs a full Transformer forward at each generation step:
 
 ```python
-# Pseudocode for ONE request. Keep the actual token IDs with every score.
-# top_tokens returns (token_id, log_probability) pairs.
-h = encoder(x)
-first_choices = top_tokens(log_softmax(head1(h)), width=W)
-candidates = []
+# Conceptual inference code; model is in evaluation mode.
+def full_recompute_sid(prompt, model, W, K):
+    B, T = prompt.shape
 
-for first_token, first_logp in first_choices:
-    second_logps = log_softmax(head2(h, embed(first_token)))
-    for second_token, second_logp in enumerate(second_logps):
-        candidates.append({
-            "sid": (first_token, second_token),
-            "score": first_logp + second_logp,
-        })
+    # First full forward: [B, T]
+    logits1 = last_logits(model(prompt, use_cache=False))
+    logp1 = level_log_probs(logits1, level=1)
+    score1, sid1 = topk(logp1, W)                  # [B, W]
 
-results = sorted(candidates, key=lambda c: c["score"], reverse=True)[:W]
+    # Copy each prompt into its W beam branches.
+    expanded = repeat_interleave(prompt, W, dim=0)
+    input2 = append_token(expanded, sid1.reshape(B * W))
+
+    # Second full forward: [B*W, T+1]
+    logits2 = last_logits(model(input2, use_cache=False))
+    logp2 = level_log_probs(logits2, level=2)
+    V2 = logp2.shape[-1]
+    logp2 = logp2.reshape(B, W, V2)
+
+    # Keep each complete SID together with its cumulative score.
+    joint_scores = score1[:, :, None] + logp2
+    return select_top_sid_pairs(sid1, joint_scores, K)
 ```
 
-For example, keeping A and B at L1 gives two branches. The second head scores continuations under each branch: A → A1, A2, A3; B → B1, B2, B3. We compare the cumulative scores of those complete SIDs and keep the best W. Several winners may come from A.
+`last_logits` extracts next-token logits at the last valid position. `level_log_probs` applies the model's level-specific token validity and normalization convention; that convention must be identical in both execution paths. `topk` returns scores and their actual SID token IDs.
 
-There is no repeated autoregressive history attention to cache in this design. The encoder may itself use attention, but running it once is a different problem from incrementally extending a causal Transformer.
+`select_top_sid_pairs` associates each score with its complete `(S1, S2)` token pair and selects the best K pairs independently for each request. For example, branches A and B produce A1, A2, A3 and B1, B2, B3. Several winning pairs may come from A. K counts final SIDs; W counts the first-level paths retained for expansion.
 
-### Autoregressive Transformer
+The second forward recomputes the prompt for every selected beam. This repeats work, but keeps execution simple. For two SID levels there are **two batched Transformer forwards**: one over B prompts and one over B×W extended prompts. The W branches do not require W sequential model calls.
 
-Here, the selected L1 token becomes input to another Transformer forward. The straightforward version reruns the prompt with that token appended. The cached version reuses the prompt's historical K/V.
+### Optimization: Incremental Decoding With KV Cache
+
+The cached path retains the prompt's attention keys and values, then processes only the selected S1 token in each branch:
 
 ```python
-# Full recomputation
-logits1 = model(prompt).last_logits
-sid1 = select_l1(logits1, W)
-logits2 = model(append_to_each_branch(prompt, sid1)).last_logits
+# prefill and decode_one are conceptual wrappers around the same model.
+# Each returns next-token logits and the updated per-layer KV cache.
+def cached_sid(prompt, model, W, K):
+    B, T = prompt.shape
 
-# Incremental computation
-logits1, prompt_kv = model.prefill(prompt)
-sid1 = select_l1(logits1, W)
-beam_kv = fork_prompt_cache(prompt_kv, W)
-logits2, beam_kv = model.decode_one(sid1, beam_kv)
+    # Prefill: process [B, T] once and retain the prompt's KV.
+    logits1, prompt_kv = model.prefill(prompt)
+    logp1 = level_log_probs(logits1, level=1)
+    score1, sid1 = topk(logp1, W)                  # [B, W]
+
+    # Match the same request/beam order as full recomputation.
+    beam_kv = fork_prompt_cache(prompt_kv, W)
+
+    # Second forward: one new S1 token per branch, with prompt history.
+    logits2, beam_kv = model.decode_one(
+        sid1.reshape(B * W), beam_kv
+    )
+    logp2 = level_log_probs(logits2, level=2)
+    V2 = logp2.shape[-1]
+    logp2 = logp2.reshape(B, W, V2)
+
+    joint_scores = score1[:, :, None] + logp2
+    return select_top_sid_pairs(sid1, joint_scores, K)
 ```
 
-With equivalent positions, masks and evaluation settings, cached and full computation should give matching next-token distributions within numerical tolerance. That is a correctness check before it is a performance comparison.
+`fork_prompt_cache` describes logical branching. An implementation may physically copy the cache or share its common prefix. In either case, each branch must attend to the correct prompt with the correct mask and token positions.
 
-A short output does not settle whether caching is worthwhile. Prompt length, beam width, memory traffic and runtime overhead all matter. Comparing an encode-once model with a different autoregressive model also does not isolate a cache optimization: their architectures and learned behavior differ.
+**Why is the second forward still necessary?** Prefill predicts a distribution over S1 before the decoder selects a token. To predict S2, the model must process that selected S1 under the original prompt context. KV caching reuses historical computation; the new S1 still traverses every Transformer layer.
+
+| Execution path | Second Transformer input | Prompt computation |
+| --- | --- | --- |
+| Full recomputation | Complete `[prompt, S1]` for each branch | Repeated in every branch |
+| KV-cached decoding | New S1 token with cached prompt K/V | Reused from prefill |
+
+For a fixed two-token SID, selecting S2 completes generation. No third forward is required merely to return the SID.
+
+### Training Versus Inference
+
+During teacher-forced training, the ground-truth S1 is already available. A causal forward over `[prompt, true_S1]` can predict S1 at the last prompt position and S2 at the S1 position, using the appropriately shifted targets. Both predictions are computed in one parallel forward without exposing future target tokens to earlier positions.
+
+During inference, S1 must first be predicted and selected. Generating S2 therefore requires the second forward shown above, with either recomputed or cached prompt history.
 
 ### What is actually inside the KV cache?
 
@@ -140,6 +185,8 @@ For a fixed two-token SID, there is no reason to run another forward on 1 merely
 
 After selecting A and B, both branches start from the prompt cache. Processing A produces `KV(prompt,A)`; processing B produces `KV(prompt,B)`. Suppose the next selection keeps A1, A2 and B1:
 
+For the two-level model, these are final results. The following pseudocode shows how their caches would branch only if generation were extended to a third SID level:
+
 ```python
 if another_sid_level_is_needed:
     # Each surviving path continues from its own parent's history.
@@ -152,13 +199,17 @@ A1 and A2 both start from the history of A, then process different new tokens. H
 
 Ordinary copied caches are enough to implement this branching. Paged KV storage becomes a consideration when duplicating and managing history consumes too much memory or time. It is an optional serving optimization, not a requirement for beam search.
 
-This also explains when the cache discussion applies: an encode-once conditional head has no repeated causal history computation to eliminate. An autoregressive implementation does; whether caching wins at the actual prompt length and beam width should be measured.
+### When Is KV Cache Worth It?
+
+KV caching is a runtime optimization to measure on this same Transformer. With short prompts, a small model and only one continuation step, creating, expanding and accessing caches may offset the savings from avoiding prompt recomputation. Prompt length, beam width and cache storage strategy all affect that tradeoff.
+
+First check that the two paths produce matching conditional distributions and cumulative SID scores within numerical tolerance, with equivalent masks, positions, precision and evaluation settings. Check selected SIDs as well, accounting for ties and small numerical differences near the selection boundary. Then compare execution time, memory use, throughput and tail latency. Section 9 separates this cache comparison from server and batching choices.
 
 ## 3. Forward produces logits; decoding chooses paths
 
-For an autoregressive decoder, prefill produces the distribution for the first generated token. Selecting that token does not yet append its K/V. Feeding it through the next forward does.
+The first Transformer forward produces logits for S1. In the cached path, that forward also retains the prompt's K/V. Selecting S1 does not yet append its K/V; feeding it through the second forward does.
 
-For a two-level SID, the sequence is:
+For a two-level SID, the cached execution is:
 
 ```text
 Forward on prompt → scores for A, B, C
@@ -168,7 +219,9 @@ Forward on B with prompt cache → scores for B1, B2, B3
 Compare complete SID scores → select final candidates
 ```
 
-The model scores possible continuations. The decoding method decides which paths survive. Changing that selection rule is how beam search, sampling and diversity-aware decoding produce different candidate sets from the same model.
+The two branch forwards shown above can be executed together as one batch. Full recomputation supplies the same conditional distributions by forwarding the complete prompt plus each selected token, as in Section 2.
+
+The model scores possible continuations. The decoding method decides which paths survive. Changing that selection rule is how beam search, sampling and diversity-aware decoding produce different candidate sets from the same model. The selector examples below work at this distribution boundary; they leave the choice of cached or full model execution to the runtime.
 
 After selecting the final SID token, no additional forward is needed just to return that SID.
 
@@ -348,39 +401,31 @@ This is why I want separate measurements for candidate generation and final-set 
 
 ## 9. Do I need Triton Inference Server, or is the current Torch service enough?
 
-**The starting point is the actual inference service: its request handling, batching, workers and model runtime.** Generating SIDs alone does not establish a need to replace it. The question is whether that service can execute the retrieval loop at the required throughput, p99 latency and cost. A small HTTP wrapper built for an experiment cannot stand in for the existing deployment when making this decision.
+**The model architecture is fixed: the autoregressive Transformer in Section 2.** The serving question is whether the current service can run its retrieval loop at the required throughput, p99 latency and cost. Full recomputation is the execution baseline; KV-cached decoding is the optimization to evaluate with the same model parameters.
 
-The earlier sections make this decision more concrete. An encode-once model runs its encoder and conditional heads. An autoregressive model runs prefill, candidate selection and the subsequent decode step, with a KV cache if useful. Both can be implemented in Torch and kept inside one request. Beam search, prefix penalties and cache reordering do not require a new inference server.
+The server handles requests, queues and workers. The Transformer runtime handles forwards, beam expansion and any KV cache. Both execution paths can run within an existing Torch-based service. A small HTTP wrapper built for an experiment cannot stand in for that service when evaluating migration.
 
-### Keep the whole SID computation inside one request
+### Baseline serving boundary: a complete SID retrieval call
 
-For a fixed two-level output, I would begin with this execution boundary:
+For the fixed two-level output, a complete retrieval call can select either execution path from Section 2:
 
 ```python
 # Pseudocode inside the current service, after assembling a request batch.
-def retrieve_sid_batch(x, model, width, architecture):
-    if architecture == "encode_once":
-        h = model.encode(x)
-        first_logits = model.head1(h)
-        sid1, score1 = select_first_level(first_logits, width)
-        second_logits = model.head2(h, sid1)
-    else:
-        first_logits, prompt_kv = model.prefill(x)
-        sid1, score1 = select_first_level(first_logits, width)
-        beam_kv = fork_prompt_cache(prompt_kv, width)
-        second_logits, beam_kv = model.decode_one(sid1, beam_kv)
-
-    # Compare candidates separately within each request, not across users.
-    return select_sid_pairs(sid1, score1, second_logits, width)
+def retrieve_sid_batch(prompt, model, width, k, use_kv_cache=False):
+    if use_kv_cache:
+        return cached_sid(prompt, model, W=width, K=k)
+    return full_recompute_sid(prompt, model, W=width, K=k)
 ```
 
-In this design, the serving layer owns request handling and batching; the model code owns this computation. In the autoregressive branch, the KV cache is temporary state inside this execution. It can be released when the SID results are complete. There is no need to turn L1 and L2 into separate client requests merely because the model is autoregressive.
+Both functions receive the same model object and use the same probability and selection conventions. Each returns complete SIDs with cumulative scores. The selected SIDs are then validated and resolved to catalog candidates, with downstream ranking if needed.
 
-B counts requests and W counts hypotheses within each request. The second autoregressive forward may process B×W rows, while the service still handles B requests. Increasing W can therefore change memory and latency substantially without changing the number of incoming requests.
+In this baseline design, cached state lives inside the retrieval call and can be released when generation completes. L1 and L2 do not need separate client requests. Continuous batching changes the internal execution boundary, as described below; a client can still submit one retrieval request and receive one final result.
+
+B counts requests and W counts hypotheses within each request. Both paths process B×W branches in the second forward. Full recomputation processes T+1 token positions per branch, while cached decoding processes one new position per branch and reads the prompt's cached K/V. Increasing W can change memory use and latency without changing the incoming request count.
 
 ### What would justify introducing Triton Server?
 
-[NVIDIA Triton Inference Server](https://docs.nvidia.com/deeplearning/triton-inference-server/user-guide/docs/user_guide/batcher.html) offers request scheduling and dynamic batching. Its batcher can group compatible requests up to the configured maximum and optionally wait for more requests. That wait trades latency for batch fill; it is not a guaranteed throughput improvement at the same p99.
+[NVIDIA Triton Inference Server](https://docs.nvidia.com/deeplearning/triton-inference-server/user-guide/docs/user_guide/batcher.html) offers request scheduling and dynamic batching. [TorchServe](https://docs.pytorch.org/serve/batch_inference_with_ts.html) also supports batching incoming requests, provided the handler performs batched computation. Request-level batching alone is therefore insufficient reason to choose one over the other.
 
 For this note, the useful decision is whether those server capabilities solve a problem the current service actually has:
 
@@ -397,46 +442,48 @@ These are proposed decision criteria, not benchmark results. Free GPU memory and
 
 ### If I do adopt it, where does the decoding loop go?
 
-For this short, fixed-depth SID model, keep the entire decoding loop inside one backend invocation. Triton schedules requests; the backend runs encoding or prefill, candidate selection and subsequent model forwards, then returns complete SIDs.
+For a whole-request baseline, the backend runs both Transformer forwards and the candidate selections inside one invocation, then returns complete SIDs. The cache flag controls the execution strategy.
 
 The Python backend's `execute(requests)` receives requests; the implementation assembles compatible input tensors, executes the batched model and returns the corresponding responses. Merely looping over requests and calling the model once per request does not make the GPU computation batched. [Triton Python backend](https://docs.nvidia.com/deeplearning/triton-inference-server/user-guide/docs/python_backend/README.html).
 
 ```python
 # Conceptual backend structure, not a complete Triton deployment.
 def execute(requests):
-    x, request_slices = assemble_compatible_inputs(requests)
-    candidates = retrieve_sid_batch(x, model, width, architecture)
+    prompt, request_slices = assemble_compatible_inputs(requests)
+    candidates = retrieve_sid_batch(
+        prompt, model, width, k, use_kv_cache=use_kv_cache
+    )
     return make_responses(candidates, request_slices)
 ```
 
 This preserves the important ownership boundary: the backend/model code manages beam parents, diversity scores and local KV state. Triton's request batcher does not infer those operations from the model weights.
 
-An autoregressive loop contained within one request does not by itself require the sequence batcher. Sequence batching addresses stateful sequences of requests that need routing to the same model instance. Keeping internal decode state across separate executions requires explicit lifecycle and scheduling design. [Triton batching documentation](https://docs.nvidia.com/deeplearning/triton-inference-server/user-guide/docs/user_guide/batcher.html).
+### Dynamic batching and continuous batching solve different scheduling problems
 
-Ordinary request-level dynamic batching also does not automatically insert new requests into an already-running decoding loop. If longer, variable-length generation eventually makes iteration-level scheduling important, that becomes a separate backend/engine evaluation. For the short fixed-depth path here, I would first measure the simpler whole-request execution.
+| Scheduling policy | When requests are grouped | What happens during generation |
+| --- | --- | --- |
+| Whole-request dynamic batching | Before a complete retrieval call | The selected batch runs through its SID generation together |
+| Continuous / inflight batching | At generation-step boundaries | Finished requests leave; eligible new requests can join while others continue |
 
-### The experiment that would change my decision
+Dynamic batching collects compatible requests arriving at different times so the model can process them together. An optional wait can improve batch fill while adding latency. It does not automatically admit new requests into an ongoing decoding loop.
 
-I would compare the existing service with a Triton-hosted version of the **same SID computation**, using the same hardware, precision, candidate width and request trace. The comparison should include:
+Continuous batching requires a runtime that preserves each request's decoding position, beam scores and, when used, KV state between executions. Prefill also consumes compute and must be scheduled. Triton's iterative-sequence mechanism allows a cooperating backend to reschedule unfinished requests. TorchServe also has continuous-batching support paths; the handler or integrated engine must implement the corresponding generation behavior. These capabilities require more than changing a batch-size setting. [Triton iterative sequences](https://docs.nvidia.com/deeplearning/triton-inference-server/user-guide/docs/user_guide/batcher.html#iterative-sequences), [TorchServe release notes](https://github.com/pytorch/serve/releases).
 
-- End-to-end p50/p95/p99 and queue time at representative and peak arrivals.
-- Actual batch sizes, throughput at the latency target, and memory use.
-- SID scores and selected candidates, so the performance comparison preserves behavior.
-- Deployment and maintenance cost, including backend integration and error handling.
+An autoregressive loop within one backend invocation does not itself require sequence batching. If execution is split across scheduling iterations, state ownership and lifetime must be explicit. Each request's beam candidates still compete only with one another, even when model forwards are batched across requests.
 
-If the current service already meets the target, introducing another serving layer needs a concrete benefit. If it misses the target, I first want to name the dominant term—queueing, model execution, selection, transfer or launch overhead—and explain why the proposed change reduces it. **The next step is a measurement of the current Torch path, not a migration triggered by the word “generative.”**
+Fixed two-token outputs leave fewer opportunities for early completion than long, variable-length outputs. That can limit the additional benefit of continuous batching, but input length alone does not settle the question. Request arrivals, prefill cost, beam width and generation duration still need measurement.
 
-### Model execution check: eager, TorchScript and CUDA Graph
+### Eager, TorchScript and CUDA Graph describe how computation executes
 
-These names describe model execution, while Triton Server describes a serving system:
+These mechanisms are separate from the choice to recompute or cache prompt history:
 
 | Mechanism | What changes |
 | --- | --- |
 | PyTorch eager | Python executes the model and dispatches its operations as it runs. |
-| [TorchScript](https://docs.pytorch.org/docs/2.10/jit.html) | The model is converted to a serializable executable program; this test uses `torch.jit.script` followed by `freeze`. |
+| [TorchScript](https://docs.pytorch.org/docs/2.10/jit.html) | A compatible model is converted to a serializable executable program. |
 | [CUDA Graph](https://docs.pytorch.org/docs/2.10/notes/cuda.html#cuda-graphs) | A compatible sequence of GPU operations is captured and replayed, reducing repeated CPU dispatch and launch work. |
 
-CUDA Graph normally preserves the kernels rather than rewriting or fusing them. Each replay computes on new input data. For the same part of a model, a request can use ordinary execution or graph replay; a larger system can use both for different paths. A graph can also capture compatible work produced by a TorchScript model. TorchScript is deprecated in the PyTorch version used here; it is included to examine an existing deployment path.
+CUDA Graph normally preserves the kernels rather than rewriting or fusing them. Each replay computes on new input data. For the same part of a model, a request can use ordinary execution or graph replay; a larger system can use both for different paths. A graph can also capture compatible work produced by a TorchScript model. The linked PyTorch documentation marks TorchScript as deprecated; it remains useful to distinguish it from server scheduling and graph replay when discussing an existing deployment.
 
 ```python
 # Conceptual pseudocode: capture once, then run new requests.
@@ -449,51 +496,31 @@ def run_request(new_input):
     return output_buffer  # Consume or copy before this buffer is reused.
 ```
 
-A synthetic encode-once SID model was measured on the same single CUDA GPU with fixed weights, FP32, 45-token inputs, two SID levels and beam width 16. It uses pooled embeddings, a shared representation and two conditional heads, totaling about 10,000 parameters. The execution comparison used PyTorch 2.10.0 and separate CUDA Graph captures for batch sizes one and eight.
+The primary execution comparison remains full recomputation versus KV-cached decoding. Keep the execution mechanism fixed while measuring caching. If CUDA Graph or another execution optimization is evaluated later, measure that change separately on the same Transformer path.
 
-The table reports the median of three rounds' p50 model-call times. Each round used 50 warm-up calls and 200 timed calls; execution order rotated between rounds. Inputs were already on the GPU. Wall-clock timing included synchronization after each call, and the graph path included copying input into its persistent GPU buffer. Compilation and capture setup were outside the timed calls.
+### Evaluation plan: the same Transformer throughout
 
-| Execution path | Batch 1 (ms/call) | Batch 8 (ms/call) |
-| --- | --- | --- |
-| PyTorch eager | 0.242 | 0.235 |
-| TorchScript: script + freeze | 0.204 | 0.198 |
-| CUDA Graph captured from eager | 0.066 | 0.069 |
+**Transformer measurements are pending.** The runnable probability-tree example in Section 10 checks selection algorithms; it does not measure Transformer execution or serving performance.
 
-For each batch size, 16 input examples produced identical selected SIDs across the three paths; scores passed checks with absolute and relative tolerances of `2e-5`. These are whole-call timings, including CPU submission overhead, rather than isolated GPU kernel durations. They exclude HTTP/RPC, host-to-device input transfer, response serialization and request queueing.
+The first experiment compares the two paths from Section 2 with the same checkpoint, model configuration, precision, evaluation mode, token masks, positions, final candidate count and decoding rules. Vary prompt length T, request batch size B and beam width W, keeping each pair of measurements matched.
 
-CUDA Graph reduced model-call time in this small fixed-shape example. The measurement does not establish end-to-end service capacity or favor one inference server over another. That comparison still requires the actual serving stack, equivalent model execution and a representative request load.
+| Question | What to measure |
+| --- | --- |
+| Do both paths implement the same conditional predictions? | L1 and L2 log probabilities, cumulative SID scores, selected SIDs and catalog validity; document numerical tolerance and tie handling |
+| How much repeated prompt computation does caching avoid? | First and second forward durations separately, plus total retrieval-call time |
+| What does cache management cost? | Allocation, beam-cache copying or sharing, cache reads and peak GPU memory, including temporary buffers |
+| Does faster model execution improve the service? | End-to-end p50/p95/p99, queue time and throughput under the latency target |
+| Does the scheduling policy help this workload? | Actual batch sizes and request arrivals; for continuous batching, evidence that new requests join before other active requests finish |
 
-### HTTP serving check: TorchServe / Netty versus Triton
+Time complete retrieval calls as well as the individual forwards. State whether inputs start on the GPU and whether transfers, cache creation, selection and synchronization are included. Separate GPU execution time from wall-clock time, which also includes CPU dispatch. Include warm-up and repeated measurements; report compilation or graph-capture setup separately if those mechanisms are used.
 
-The model-call timings above leave out the server. This second experiment compares two complete HTTP serving integrations:
+After establishing this model baseline, compare the existing service with a Triton-hosted version of the **same Transformer runtime**. Match hardware, precision, cache mode, decoding rules, workload and measurement boundaries. Name the server integration and backend: a Python integration and a native model backend are different execution paths, so the backend must remain visible in the comparison.
 
-- [TorchServe](https://docs.pytorch.org/serve/FAQs.html), including its Netty HTTP frontend, request batching and one Python model worker.
-- Triton Inference Server with PyTriton, including Triton's HTTP frontend and batching, followed by the Python proxy and model callable.
+End-to-end measurements should include request handling, queueing, transfers, generation, response processing, and any SID resolution or ranking inside the measured boundary. Report actual batch sizes, worker counts, batching waits and the arrival pattern. Equal maximum-batch settings do not guarantee equal executed batches.
 
-Both call the same SID runtime. Each integration is tested with eager execution, TorchScript (`script` + `freeze`), and CUDA Graph. The graph variant has a separate capture for every batch size from one through eight, so dynamic batching can choose any supported size.
+Evaluate continuous batching separately from the whole-request baseline. The workload must include staggered arrivals and record admission and completion events, so the measurement demonstrates step-level scheduling rather than merely concurrent HTTP requests. The model's fixed SID depth and candidate-selection behavior should remain unchanged.
 
-The same synthetic model, weights, FP32 precision, input length, SID depth, beam width and single CUDA GPU are used throughout. Both services have one model worker, maximum batch size eight, a configured maximum batching wait of 1 ms, and two HTTP frontend threads. System metric collection is disabled in both. The versions are TorchServe 0.12.0 with Java 21, and Triton Server 2.51.0 with PyTriton 0.7.0. The Triton integration executes the model through Python; it does not use Triton's native LibTorch or TensorRT backend.
-
-The client sends one example per HTTP JSON request on the same host. Each concurrency setting receives 100 warm-up requests before each of three timed rounds, with 400 measured requests per round. The measurements include request handling, queueing, transfers, model execution, response processing and client-side result decoding. Compilation and graph capture occur during initialization. This is a closed-loop load: each client waits for its response before sending another request.
-
-**C1** means one concurrent client; **C8** means eight. The p50 and throughput columns report medians of the three round-level summaries. The final column shows the full range of the three p99 measurements, preserving the observed tail-latency variation.
-
-| HTTP serving integration | Execution | C1 p50 (ms) | C8 p50 (ms) | C8 requests/s | C8 p99 range (ms) |
-| --- | --- | --- | --- | --- | --- |
-| TorchServe / Netty | Eager | 4.00 | 5.96 | 1,234 | 7.58–95.59 |
-| Triton / PyTriton | Eager | 5.34 | 10.92 | 722 | 14.76–22.11 |
-| TorchServe / Netty | TorchScript | 3.26 | 7.08 | 1,076 | 7.98–105.15 |
-| Triton / PyTriton | TorchScript | 5.07 | 11.15 | 728 | 13.25–15.63 |
-| TorchServe / Netty | CUDA Graph | 2.48 | 5.56 | 1,304 | 8.15–119.66 |
-| Triton / PyTriton | CUDA Graph | 4.18 | 9.33 | 823 | 12.84–23.47 |
-
-Runtime checks cover every batch size from one through eight, and 16 HTTP input examples are compared across all six variants. Selected SIDs match exactly; scores pass checks with absolute and relative tolerances of `2e-5`. All timed requests complete successfully.
-
-Matching the maximum batch size does not produce identical batches. At C8, the mean executed batch size is approximately 3.7–4.0 for TorchServe and 3.2 for Triton in this experiment. That difference is part of the observed scheduling behavior.
-
-TorchServe has lower median latency and higher observed C8 throughput in these configurations, but its first measured C8 round also shows substantial tail spikes even after warm-up. Their cause has not been isolated. The experiment does not attribute the gap specifically to Netty, batching, proxy communication or model execution.
-
-These results apply to this small model and these two Python integrations. A deployment decision still requires the actual model, serving configuration, arrival pattern and latency target. In particular, the PyTriton result cannot stand in for every Triton backend.
+If the current service meets the target, a migration needs an additional operational or performance benefit. If it misses the target, identify whether queueing, repeated prompt computation, cache management, selection, transfers or CPU launches dominate before choosing an optimization. Deployment and maintenance cost belong in that decision alongside latency and throughput.
 
 ## 10. Executable check: one tree, several decoding methods
 
